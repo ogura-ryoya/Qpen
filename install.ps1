@@ -5,10 +5,13 @@ $ErrorActionPreference = 'Stop'
 $dir = Join-Path $env:LOCALAPPDATA 'Qpen'
 $ps1 = Join-Path $dir 'Qpen.ps1'
 
-# 動いている Qpen を止める（上書きするため）
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -like '*\Qpen\Qpen.ps1*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# 動いている Qpen を止め、完全に終わるまで待つ（上書きするため。どこから起動したものでも止める）
+$running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+    Where-Object { $_.CommandLine -like '*\Qpen.ps1*' })
+foreach ($p in $running) {
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $p.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
+}
 
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'Qpen.ps1') $ps1 -Force

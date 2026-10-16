@@ -1,6 +1,6 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
-$Version = '1.1.0'
+$Version = '1.1.1'
 $AppName = 'Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
@@ -29,7 +29,15 @@ if ((Get-CimInstance Win32_Process -Filter "ProcessId=$parentId").Name -ne 'conh
 }
 
 $mutex = New-Object System.Threading.Mutex($false, 'Local\Qpen')
-if (-not $mutex.WaitOne(0)) { exit }  # すでに起動している
+try {
+    $acquired = $mutex.WaitOne(0)
+} catch {
+    # 前の Qpen が強制終了された（インストールで上書きされた）場合は AbandonedMutexException になる。
+    # このとき所有権はこちらに移っているので続行する（PowerShell が例外を包むことがあるので内側も見る）
+    $ex = $_.Exception
+    $acquired = ($ex -is [System.Threading.AbandonedMutexException]) -or ($ex.InnerException -is [System.Threading.AbandonedMutexException])
+}
+if (-not $acquired) { exit }  # すでに起動している
 
 New-Shortcut $startupLnk  # 起動するたびに自動起動を登録し直す
 
@@ -134,7 +142,8 @@ $hk.add_Pressed({
         $items = @($w.Document.SelectedItems())
     } catch { return }
     foreach ($item in $items) {
-        if ($item.IsFolder) { continue }
+        # フォルダは開かない（IsFolder は ZIP も true になるため、実際のフォルダかどうかで判定する）
+        if ([System.IO.Directory]::Exists($item.Path)) { continue }
         # 開けないファイルがあっても、残りのファイルは開く
         try { Start-Process -FilePath $item.Path } catch {}
         Start-Sleep -Milliseconds 300
