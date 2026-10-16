@@ -143,15 +143,16 @@ $hk.add_Pressed({
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = [ExplorerHotkey]::MakeIcon()
-$Hotkey = 'Ctrl+Q'
-$tray.Text = "$AppName v$Version  $Hotkey"
+$Usage = 'Ctrl+Q でまとめて開く'
+$tray.Text = "$AppName v$Version`n$Usage"  # 63 文字以内（NotifyIcon の上限）
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# 名前（太字）、バージョン、ショートカットキーを縦に並べる（表示のみ）
+# 名前（太字）、バージョン、使い方を縦に並べる。表示だけなので押せないようにする
 $nameItem = New-Object System.Windows.Forms.ToolStripMenuItem $AppName
 $nameItem.Font = New-Object System.Drawing.Font($nameItem.Font, [System.Drawing.FontStyle]::Bold)
 $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem "v$Version"
-$hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem "$Hotkey（エクスプローラー上）"
+$hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem $Usage
+foreach ($mi in $nameItem, $versionItem, $hotkeyItem) { $mi.Enabled = $false }
 $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了（自動起動も解除）'
 [void]$menu.Items.Add($nameItem)
 [void]$menu.Items.Add($versionItem)
