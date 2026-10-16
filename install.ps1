@@ -8,7 +8,7 @@ $ps1 = Join-Path $dir 'Qpen.ps1'
 # 動いている Qpen を止める（上書きするため）
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
     Where-Object { $_.CommandLine -like '*\Qpen\Qpen.ps1*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'Qpen.ps1') $ps1 -Force

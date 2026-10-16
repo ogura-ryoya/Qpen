@@ -1,6 +1,6 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
-$Version = '1.0.0'
+$Version = '1.1.0'
 $AppName = 'Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
@@ -32,8 +32,6 @@ $mutex = New-Object System.Threading.Mutex($false, 'Local\Qpen')
 if (-not $mutex.WaitOne(0)) { exit }  # すでに起動している
 
 New-Shortcut $startupLnk  # 起動するたびに自動起動を登録し直す
-# 旧バージョンが作っていたスタートメニューのショートカットを削除
-Remove-Item (Join-Path ([Environment]::GetFolderPath('Programs')) "$AppName.lnk") -ErrorAction SilentlyContinue
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
@@ -128,17 +126,19 @@ $hk.add_Pressed({
         $fg = [ExplorerHotkey]::Foreground()
         $wins = @($shell.Windows() | Where-Object { $_.HWND -eq $fg.ToInt64() })
         if ($wins.Count -eq 0) { return }
-        # Windows 11 のタブは同じウィンドウハンドルを共有するので、ウィンドウタイトルとフォルダ名が一致するタブを選ぶ
+        # Windows 11 のタブは同じウィンドウハンドルを共有するので、ウィンドウタイトルからいま表示中のタブを選ぶ。
+        # タイトルは「フォルダ名 - エクスプローラー」や「フォルダ名 と他 2 個のタブ - エクスプローラー」の形になる
         $title = [ExplorerHotkey]::Title($fg)
-        $w = $wins | Where-Object { $title.StartsWith($_.Document.Folder.Title) } | Select-Object -First 1
+        $w = $wins | Where-Object { $t = $_.Document.Folder.Title; $title -eq $t -or $title.StartsWith("$t ") } | Select-Object -First 1
         if (-not $w) { $w = $wins[0] }
-        foreach ($item in @($w.Document.SelectedItems())) {
-            if (-not $item.IsFolder) {
-                Start-Process -FilePath $item.Path
-                Start-Sleep -Milliseconds 300
-            }
-        }
-    } catch {}
+        $items = @($w.Document.SelectedItems())
+    } catch { return }
+    foreach ($item in $items) {
+        if ($item.IsFolder) { continue }
+        # 開けないファイルがあっても、残りのファイルは開く
+        try { Start-Process -FilePath $item.Path } catch {}
+        Start-Sleep -Milliseconds 300
+    }
 })
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
