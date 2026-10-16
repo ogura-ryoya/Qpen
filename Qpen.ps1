@@ -21,7 +21,7 @@ $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProce
 if ((Get-CimInstance Win32_Process -Filter "ProcessId=$parentId").Name -ne 'conhost.exe') {
     New-Shortcut $startupLnk
     explorer.exe $startupLnk
-    # Fall back to a direct launch if Explorer did not start it
+    # エクスプローラー経由で起動しなかった場合は、直接起動する
     $m = $null
     for ($i = 0; $i -lt 10 -and -not [System.Threading.Mutex]::TryOpenExisting('Local\Qpen', [ref]$m); $i++) { Start-Sleep -Milliseconds 500 }
     if (-not $m) { Start-Process $startupLnk }
@@ -29,9 +29,9 @@ if ((Get-CimInstance Win32_Process -Filter "ProcessId=$parentId").Name -ne 'conh
 }
 
 $mutex = New-Object System.Threading.Mutex($false, 'Local\Qpen')
-if (-not $mutex.WaitOne(0)) { exit }  # already running
+if (-not $mutex.WaitOne(0)) { exit }  # すでに起動している
 
-New-Shortcut $startupLnk  # re-enable autostart whenever launched
+New-Shortcut $startupLnk  # 起動するたびに自動起動を登録し直す
 # 旧バージョンが作っていたスタートメニューのショートカットを削除
 Remove-Item (Join-Path ([Environment]::GetFolderPath('Programs')) "$AppName.lnk") -ErrorAction SilentlyContinue
 
@@ -45,8 +45,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
-// Ctrl+Q is registered only while an Explorer window (CabinetWClass) is in the foreground,
-// so other apps keep their own Ctrl+Q.
+// エクスプローラーのウィンドウ（CabinetWClass）が前面にある間だけ Ctrl+Q を登録する。
+// ほかのアプリの Ctrl+Q には影響しない。
 public class ExplorerHotkey : NativeWindow, IDisposable {
     delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int obj, int child, uint thread, uint time);
     [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc proc, uint pid, uint tid, uint flags);
@@ -96,7 +96,7 @@ public class ExplorerHotkey : NativeWindow, IDisposable {
         DestroyHandle();
     }
 
-    // Tray icon: white "Q" on a blue rounded square
+    // トレイアイコン：青い角丸の四角に白い「Q」
     public static Icon MakeIcon() {
         var b = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(b))
@@ -128,7 +128,7 @@ $hk.add_Pressed({
         $fg = [ExplorerHotkey]::Foreground()
         $wins = @($shell.Windows() | Where-Object { $_.HWND -eq $fg.ToInt64() })
         if ($wins.Count -eq 0) { return }
-        # Windows 11 tabs share one HWND; pick the tab whose folder name matches the window title
+        # Windows 11 のタブは同じウィンドウハンドルを共有するので、ウィンドウタイトルとフォルダ名が一致するタブを選ぶ
         $title = [ExplorerHotkey]::Title($fg)
         $w = $wins | Where-Object { $title.StartsWith($_.Document.Folder.Title) } | Select-Object -First 1
         if (-not $w) { $w = $wins[0] }
