@@ -1,0 +1,4 @@
+# Windows PowerShell 5.1 needs CRLF-friendly scripts; Qpen.ps1 must keep its UTF-8 BOM
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.md text eol=lf
