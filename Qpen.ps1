@@ -1,6 +1,6 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
-# GitHub の Releases に新しい版が出ると、自動で更新する。
+# 起動時と、トレイの「更新を確認」を押したときに GitHub の Releases を確認し、新しい版があれば自動で更新する。
 $Version = '1.2.0'
 $AppName = 'Qpen'
 
@@ -159,17 +159,19 @@ $Usage = 'Ctrl+Q でまとめて開く'
 $tray.Text = "$AppName v$Version`n$Usage"  # 63 文字以内（NotifyIcon の上限）
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# 名前（太字）、バージョン、使い方を縦に並べる。表示だけなので押せないようにする
+# 名前（太字）、バージョン、使い方を縦に並べる。表示だけなので押せないようにする。押せるのは「更新を確認」と「終了」
 $nameItem = New-Object System.Windows.Forms.ToolStripMenuItem $AppName
 $nameItem.Font = New-Object System.Drawing.Font($nameItem.Font, [System.Drawing.FontStyle]::Bold)
 $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem "v$Version"
 $hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem $Usage
 foreach ($mi in $nameItem, $versionItem, $hotkeyItem) { $mi.Enabled = $false }
+$updateItem = New-Object System.Windows.Forms.ToolStripMenuItem '更新を確認'
 $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了（自動起動も解除）'
 [void]$menu.Items.Add($nameItem)
 [void]$menu.Items.Add($versionItem)
 [void]$menu.Items.Add($hotkeyItem)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$menu.Items.Add($updateItem)
 [void]$menu.Items.Add($exitItem)
 $tray.ContextMenuStrip = $menu
 
@@ -221,23 +223,45 @@ $applyUpdate = {
     [System.Windows.Forms.Application]::Exit()
 }
 
-# 起動 1 分後に 1 回確認し、その後は 12 時間ごとに確認する。タイマーは 5 秒ごとに、確認の時刻と終わったかを見る
-$script:nextCheck = (Get-Date).AddMinutes(1)
+# 確認を始める。$manual は「更新を確認」が押されたとき。押したときは、更新がなくても結果を通知する
+$startCheck = {
+    param($manual)
+    if ($script:checking) { return }  # 確認中
+    $updateItem.Enabled = $false
+    $updateItem.Text = '更新を確認中…'
+    $shellForCheck = [powershell]::Create().AddScript($checkUpdate).AddArgument($Repo).AddArgument($Version)
+    $script:checking = @{ Shell = $shellForCheck; Async = $shellForCheck.BeginInvoke(); Manual = $manual }
+}
+$updateItem.add_Click({ & $startCheck $true })
+
+# 確認は起動 1 分後の 1 回と、「更新を確認」を押したときだけ行う。
+# タイマーは 1 秒ごとに、起動時の確認の時刻と、確認が終わったかを見る
+$script:startupCheckAt = (Get-Date).AddMinutes(1)
 $script:checking = $null
 $updateTimer = New-Object System.Windows.Forms.Timer
-$updateTimer.Interval = 5000
+$updateTimer.Interval = 1000
 $updateTimer.add_Tick({
-    if ($script:checking) {
-        if (-not $script:checking.Async.IsCompleted) { return }
-        $update = $null
-        try { $update = @($script:checking.Shell.EndInvoke($script:checking.Async)) | Where-Object { $_ } | Select-Object -First 1 } catch {}
-        $script:checking.Shell.Dispose()
-        $script:checking = $null
-        if ($update) { try { & $applyUpdate $update } catch {} }
-    } elseif ((Get-Date) -ge $script:nextCheck) {
-        $script:nextCheck = (Get-Date).AddHours(12)
-        $shellForCheck = [powershell]::Create().AddScript($checkUpdate).AddArgument($Repo).AddArgument($Version)
-        $script:checking = @{ Shell = $shellForCheck; Async = $shellForCheck.BeginInvoke() }
+    if ($script:startupCheckAt -and (Get-Date) -ge $script:startupCheckAt) {
+        $script:startupCheckAt = $null
+        & $startCheck $false
+    }
+    if (-not $script:checking -or -not $script:checking.Async.IsCompleted) { return }
+
+    $manual = $script:checking.Manual
+    $update = $null
+    $failed = $false
+    try { $update = @($script:checking.Shell.EndInvoke($script:checking.Async)) | Where-Object { $_ } | Select-Object -First 1 } catch { $failed = $true }
+    $script:checking.Shell.Dispose()
+    $script:checking = $null
+    $updateItem.Text = '更新を確認'
+    $updateItem.Enabled = $true
+
+    if ($update) {
+        try { & $applyUpdate $update } catch {}
+    } elseif ($manual -and $failed) {
+        $tray.ShowBalloonTip(5000, '更新を確認できませんでした', 'インターネットに接続されているか確認してください。', [System.Windows.Forms.ToolTipIcon]::Warning)
+    } elseif ($manual) {
+        $tray.ShowBalloonTip(5000, "$AppName は最新版です", "v$Version", [System.Windows.Forms.ToolTipIcon]::Info)
     }
 })
 $updateTimer.Start()
