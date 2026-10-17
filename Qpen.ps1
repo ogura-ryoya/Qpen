@@ -1,11 +1,14 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
-$Version = '1.1.1'
+# GitHub の Releases に新しい版が出ると、自動で更新する。
+$Version = '1.2.0'
 $AppName = 'Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
 $startupLnk = Join-Path ([Environment]::GetFolderPath('Startup')) "$AppName.lnk"
 $installedFlag = Join-Path (Split-Path $ps1) 'installed.flag'  # install.ps1 が置く。初回起動時に通知を出す
+$updatedFlag = Join-Path (Split-Path $ps1) 'updated.flag'      # 自動更新で置く。中身は新しいバージョン
+$Repo = 'ogura-ryoya/Qpen'                                       # 自動更新の取得元（GitHub の Releases）
 
 function New-Shortcut($path) {
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
@@ -172,16 +175,83 @@ $tray.ContextMenuStrip = $menu
 
 $exitItem.add_Click({
     Remove-Item $startupLnk -ErrorAction SilentlyContinue
+    $updateTimer.Stop()
     $tray.Visible = $false
     $hk.Dispose()
     [System.Windows.Forms.Application]::Exit()
 })
+
+# ---- 自動更新 ----
+# GitHub の最新リリースを確認し、新しい版があれば Qpen.ps1 を一時フォルダにダウンロードして検証する。
+# 通信で画面が固まらないよう、別のスレッド（ランスペース）で実行する。新しい版がなければ $null を返す
+$checkUpdate = {
+    param($repo, $current)
+    $ErrorActionPreference = 'Stop'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'Qpen' } -TimeoutSec 15
+    $tag = $release.tag_name
+    $latest = [version]($tag.TrimStart('v'))
+    if ($latest -le [version]$current) { return $null }
+
+    $tmp = Join-Path $env:TEMP "Qpen-$latest.ps1"
+    Invoke-WebRequest "https://raw.githubusercontent.com/$repo/$tag/Qpen.ps1" -OutFile $tmp -UseBasicParsing -TimeoutSec 30
+    # 壊れたファイルで上書きしないよう、構文エラーがなく、中のバージョンがタグと一致することを確かめる
+    $errors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$errors)
+    $text = [IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8)
+    if ($errors.Count -gt 0 -or $text -notmatch "(?m)^\`$Version = '$([regex]::Escape("$latest"))'") {
+        Remove-Item $tmp -ErrorAction SilentlyContinue
+        return $null
+    }
+    [pscustomobject]@{ Version = "$latest"; Path = $tmp }
+}
+
+# 新しい版に入れ替えて起動し直す。ミューテックスを手放してから新しい Qpen を起動し、自分は終了する
+$applyUpdate = {
+    param($update)
+    Copy-Item $update.Path $ps1 -Force
+    Remove-Item $update.Path -ErrorAction SilentlyContinue
+    Set-Content $updatedFlag $update.Version -Encoding UTF8
+    $updateTimer.Stop()
+    $tray.Visible = $false
+    $hk.Dispose()
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+    Start-Process $startupLnk
+    [System.Windows.Forms.Application]::Exit()
+}
+
+# 起動 1 分後に 1 回確認し、その後は 12 時間ごとに確認する。タイマーは 5 秒ごとに、確認の時刻と終わったかを見る
+$script:nextCheck = (Get-Date).AddMinutes(1)
+$script:checking = $null
+$updateTimer = New-Object System.Windows.Forms.Timer
+$updateTimer.Interval = 5000
+$updateTimer.add_Tick({
+    if ($script:checking) {
+        if (-not $script:checking.Async.IsCompleted) { return }
+        $update = $null
+        try { $update = @($script:checking.Shell.EndInvoke($script:checking.Async)) | Where-Object { $_ } | Select-Object -First 1 } catch {}
+        $script:checking.Shell.Dispose()
+        $script:checking = $null
+        if ($update) { try { & $applyUpdate $update } catch {} }
+    } elseif ((Get-Date) -ge $script:nextCheck) {
+        $script:nextCheck = (Get-Date).AddHours(12)
+        $shellForCheck = [powershell]::Create().AddScript($checkUpdate).AddArgument($Repo).AddArgument($Version)
+        $script:checking = @{ Shell = $shellForCheck; Async = $shellForCheck.BeginInvoke() }
+    }
+})
+$updateTimer.Start()
 
 $tray.Visible = $true
 if (Test-Path $installedFlag) {
     Remove-Item $installedFlag -ErrorAction SilentlyContinue
     $tray.ShowBalloonTip(8000, "$AppName をインストールしました",
         'エクスプローラーでファイルを選んで Ctrl+Q を押すと、まとめて開けます。', [System.Windows.Forms.ToolTipIcon]::Info)
+} elseif (Test-Path $updatedFlag) {
+    $newVersion = (Get-Content $updatedFlag -Encoding UTF8 -TotalCount 1)
+    Remove-Item $updatedFlag -ErrorAction SilentlyContinue
+    $tray.ShowBalloonTip(8000, "$AppName を v$newVersion に更新しました",
+        '引き続き、エクスプローラーで Ctrl+Q を押すとまとめて開けます。', [System.Windows.Forms.ToolTipIcon]::Info)
 }
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()
