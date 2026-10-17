@@ -184,24 +184,28 @@ $exitItem.add_Click({
 })
 
 # ---- 自動更新 ----
-# GitHub の最新リリースを確認し、新しい版があれば Qpen.ps1 を一時フォルダにダウンロードして検証する。
-# 通信で画面が固まらないよう、別のスレッド（ランスペース）で実行する。新しい版がなければ $null を返す
+# GitHub の最新リリースの Qpen.ps1 を一時フォルダにダウンロードし、中に書かれたバージョンで新しいかを判断する。
+# （タグはファイルの取得先にだけ使う。タグの番号とファイルのバージョンがずれていても誤動作しない）
+# 通信で画面が固まらないよう、別のスレッド（ランスペース）で実行する。
+# 新しい版がなければ $null を返し、通信の失敗やファイルが壊れているときは例外を投げる
 $checkUpdate = {
     param($repo, $current)
     $ErrorActionPreference = 'Stop'
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'Qpen' } -TimeoutSec 15
-    $tag = $release.tag_name
-    $latest = [version]($tag.TrimStart('v'))
-    if ($latest -le [version]$current) { return $null }
+    $tmp = Join-Path $env:TEMP 'Qpen-update.ps1'
+    Invoke-WebRequest "https://raw.githubusercontent.com/$repo/$($release.tag_name)/Qpen.ps1" -OutFile $tmp -UseBasicParsing -TimeoutSec 30
 
-    $tmp = Join-Path $env:TEMP "Qpen-$latest.ps1"
-    Invoke-WebRequest "https://raw.githubusercontent.com/$repo/$tag/Qpen.ps1" -OutFile $tmp -UseBasicParsing -TimeoutSec 30
-    # 壊れたファイルで上書きしないよう、構文エラーがなく、中のバージョンがタグと一致することを確かめる
+    # 壊れたファイルで上書きしないよう、構文エラーがなく、バージョンが読み取れることを確かめる
     $errors = $null
     [void][Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$errors)
-    $text = [IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8)
-    if ($errors.Count -gt 0 -or $text -notmatch "(?m)^\`$Version = '$([regex]::Escape("$latest"))'") {
+    $match = [regex]::Match([IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8), "(?m)^\`$Version = '(\d+\.\d+\.\d+)'")
+    if ($errors.Count -gt 0 -or -not $match.Success) {
+        Remove-Item $tmp -ErrorAction SilentlyContinue
+        throw 'ダウンロードした Qpen.ps1 が壊れています'
+    }
+    $latest = [version]$match.Groups[1].Value
+    if ($latest -le [version]$current) {
         Remove-Item $tmp -ErrorAction SilentlyContinue
         return $null
     }
@@ -265,7 +269,7 @@ $updateTimer.add_Tick({
         $script:startupRetries--
         $script:startupCheckAt = (Get-Date).AddMinutes(1)
     } elseif ($manual -and $failed) {
-        $tray.ShowBalloonTip(5000, '更新を確認できませんでした', 'インターネットに接続されているか確認してください。', [System.Windows.Forms.ToolTipIcon]::Warning)
+        $tray.ShowBalloonTip(5000, '更新を確認できませんでした', 'インターネットの接続を確認して、しばらくしてからもう一度お試しください。', [System.Windows.Forms.ToolTipIcon]::Warning)
     } elseif ($manual) {
         $tray.ShowBalloonTip(5000, "$AppName は最新版です", "v$Version", [System.Windows.Forms.ToolTipIcon]::Info)
     }
