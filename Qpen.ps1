@@ -1,7 +1,7 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
 # 起動時と、トレイの「更新を確認」を押したときに GitHub の Releases を確認し、新しい版があれば自動で更新する。
-$Version = '1.2.0'
+$Version = '1.2.1'
 $AppName = 'Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
@@ -234,9 +234,12 @@ $startCheck = {
 }
 $updateItem.add_Click({ & $startCheck $true })
 
-# 確認は起動 1 分後の 1 回と、「更新を確認」を押したときだけ行う。
+# 確認は起動した直後の 1 回と、「更新を確認」を押したときだけ行う。
+# 起動直後はネットワークがまだつながっていないことがあるので、起動時の確認に失敗したら
+# 通知は出さずに 1 分後にやり直す（最大 5 回）。
 # タイマーは 1 秒ごとに、起動時の確認の時刻と、確認が終わったかを見る
-$script:startupCheckAt = (Get-Date).AddMinutes(1)
+$script:startupCheckAt = Get-Date
+$script:startupRetries = 5
 $script:checking = $null
 $updateTimer = New-Object System.Windows.Forms.Timer
 $updateTimer.Interval = 1000
@@ -258,6 +261,9 @@ $updateTimer.add_Tick({
 
     if ($update) {
         try { & $applyUpdate $update } catch {}
+    } elseif (-not $manual -and $failed -and $script:startupRetries -gt 0) {
+        $script:startupRetries--
+        $script:startupCheckAt = (Get-Date).AddMinutes(1)
     } elseif ($manual -and $failed) {
         $tray.ShowBalloonTip(5000, '更新を確認できませんでした', 'インターネットに接続されているか確認してください。', [System.Windows.Forms.ToolTipIcon]::Warning)
     } elseif ($manual) {
