@@ -1,12 +1,15 @@
 ﻿# Qpen: エクスプローラーで Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、自動起動を登録する。起動時と「更新を確認」で GitHub の最新リリースに更新する。
-$Version = '1.4.1'
+$Version = '1.4.2'
 $AppName = 'Qpen'
 $Repo = 'ogura-ryoya/Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
 $appDir = Split-Path $ps1
 $startupLnk = Join-Path ([Environment]::GetFolderPath('Startup')) "$AppName.lnk"
+$startMenuLnk = Join-Path ([Environment]::GetFolderPath('Programs')) "$AppName.lnk"
+$icoPath = Join-Path $appDir "$AppName.ico"
+$appId = "ogura-ryoya.$AppName"  # 通知でほかの PowerShell 製ツールと区別する ID
 $installedFlag = Join-Path $appDir 'installed.flag'    # インストール直後
 $updatedFlag = Join-Path $appDir 'updated.flag'        # 更新直後（中身は新しい版）
 $rolledBackFlag = Join-Path $appDir 'rolledback.flag'  # 更新した版が起動できず戻した（中身はその版）
@@ -20,6 +23,7 @@ function New-Shortcut($path) {
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
     $s.TargetPath = $conhost
     $s.Arguments = $launchArgs
+    $s.IconLocation = "$icoPath,0"
     $s.WindowStyle = 7
     $s.Save()
 }
@@ -43,14 +47,13 @@ try {
 }
 if (-not $acquired) { exit }  # すでに起動している
 
-$autostartFailed = $false
-try { New-Shortcut $startupLnk } catch { $autostartFailed = $true }
-
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -65,10 +68,8 @@ public class ExplorerHotkey : NativeWindow, IDisposable {
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
 
     public static IntPtr Foreground() { return GetForegroundWindow(); }
-    public static string Title(IntPtr h) { var s = new StringBuilder(1024); GetWindowText(h, s, 1024); return s.ToString(); }
 
     // 拡大率に合わせてくっきり表示する。ウィンドウを作る前に呼ぶ
     public static void EnableDpiAwareness() { SetProcessDPIAware(); }
@@ -110,33 +111,123 @@ public class ExplorerHotkey : NativeWindow, IDisposable {
     }
 
     // 青いグラデーションの角丸の四角に、線で描いた白い「Q」。32×32 を基準に拡大・縮小する
-    public static Icon MakeIcon(int size) {
-        using (var b = new Bitmap(size, size)) {
-            using (var g = Graphics.FromImage(b))
-            using (var tile = new GraphicsPath())
-            using (var bg = new LinearGradientBrush(new PointF(0f, 1f), new PointF(0f, 31f), Color.FromArgb(0x4C, 0xA8, 0xF5), Color.FromArgb(0x0A, 0x5C, 0xC4)))
-            using (var pen = new Pen(Color.White, 3.6f)) {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.ScaleTransform(size / 32f, size / 32f);
-                tile.AddArc(1f, 1f, 16f, 16f, 180f, 90f);
-                tile.AddArc(15f, 1f, 16f, 16f, 270f, 90f);
-                tile.AddArc(15f, 15f, 16f, 16f, 0f, 90f);
-                tile.AddArc(1f, 15f, 16f, 16f, 90f, 90f);
-                tile.CloseFigure();
-                g.FillPath(bg, tile);
-                pen.StartCap = LineCap.Round;
-                pen.EndCap = LineCap.Round;
-                g.DrawEllipse(pen, 7.5f, 7f, 15f, 15f);
-                g.DrawLine(pen, 18f, 17.5f, 24.5f, 24f);
-            }
-            return Icon.FromHandle(b.GetHicon());
+    static Bitmap Draw(int size) {
+        var b = new Bitmap(size, size);
+        using (var g = Graphics.FromImage(b))
+        using (var tile = new GraphicsPath())
+        using (var bg = new LinearGradientBrush(new PointF(0f, 1f), new PointF(0f, 31f), Color.FromArgb(0x4C, 0xA8, 0xF5), Color.FromArgb(0x0A, 0x5C, 0xC4)))
+        using (var pen = new Pen(Color.White, 3.6f)) {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.ScaleTransform(size / 32f, size / 32f);
+            tile.AddArc(1f, 1f, 16f, 16f, 180f, 90f);
+            tile.AddArc(15f, 1f, 16f, 16f, 270f, 90f);
+            tile.AddArc(15f, 15f, 16f, 16f, 0f, 90f);
+            tile.AddArc(1f, 15f, 16f, 16f, 90f, 90f);
+            tile.CloseFigure();
+            g.FillPath(bg, tile);
+            pen.StartCap = LineCap.Round;
+            pen.EndCap = LineCap.Round;
+            g.DrawEllipse(pen, 7.5f, 7f, 15f, 15f);
+            g.DrawLine(pen, 18f, 17.5f, 24.5f, 24f);
         }
+        return b;
+    }
+
+    public static Icon MakeIcon(int size) {
+        using (var b = Draw(size)) return Icon.FromHandle(b.GetHicon());
+    }
+
+    // 32×32 の PNG を 1 枚だけ入れた .ico を書き出す（ヘッダー 6 バイト＋項目 16 バイトのあとに PNG）
+    public static void SaveIco(string path) {
+        byte[] png;
+        using (var b = Draw(32))
+        using (var ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); png = ms.ToArray(); }
+        using (var w = new BinaryWriter(File.Create(path))) {
+            w.Write(new byte[] { 0, 0, 1, 0, 1, 0, 32, 32, 0, 0, 1, 0, 32, 0 });
+            w.Write(png.Length);
+            w.Write(22);
+            w.Write(png);
+        }
+    }
+}
+
+// 通知の見出しの名前とアイコンは、同じ ID を持つスタートメニューのショートカットから取られる
+public static class AppUserModel {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore {
+        void GetCount(out uint n);
+        void GetAt(uint i, IntPtr key);
+        void GetValue(IntPtr key, IntPtr value);
+        void SetValue(ref PropertyKey key, ref PropVariant value);
+        void Commit();
+    }
+    struct PropertyKey { public Guid fmtid; public uint pid; }
+    [StructLayout(LayoutKind.Explicit)]
+    struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; [FieldOffset(16)] public IntPtr pad; }
+
+    // ショートカットに ID を書き込み、このプロセスにも同じ ID を設定する
+    public static void SetAppId(string lnkPath, string id) {
+        var link = (System.Runtime.InteropServices.ComTypes.IPersistFile)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+        link.Load(lnkPath, 2);  // STGM_READWRITE
+        var key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };  // System.AppUserModel.ID
+        var value = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(id) };  // VT_LPWSTR
+        try {
+            var store = (IPropertyStore)link;
+            store.SetValue(ref key, ref value);
+            store.Commit();
+            link.Save(lnkPath, true);
+        } finally { Marshal.FreeCoTaskMem(value.p); Marshal.ReleaseComObject(link); }
+        SetCurrentProcessExplicitAppUserModelID(id);
+    }
+}
+
+public static class ExplorerTab {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+
+    [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IServiceProvider {
+        [PreserveSig] int QueryService(ref Guid service, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object obj);
+    }
+
+    [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellBrowser {
+        void GetWindow(out IntPtr hwnd);  // IOleWindow::GetWindow
+    }
+
+    // Windows 11 のタブ: 先頭の ShellTabWindowClass が表示中のタブ
+    public static IntPtr Active(IntPtr window) { return FindWindowEx(window, IntPtr.Zero, "ShellTabWindowClass", null); }
+
+    // Shell.Application の Windows() の要素が、どのタブのものかを返す
+    public static IntPtr Of(object browser) {
+        try {
+            var service = new Guid("4C96BE40-915C-11CF-99D3-00AA004AE837");  // SID_STopLevelBrowser
+            var iid = typeof(IShellBrowser).GUID;
+            object o;
+            if (((IServiceProvider)browser).QueryService(ref service, ref iid, out o) != 0 || o == null) return IntPtr.Zero;
+            IntPtr h;
+            ((IShellBrowser)o).GetWindow(out h);
+            return h;
+        } catch { return IntPtr.Zero; }
     }
 }
 "@
 
 [ExplorerHotkey]::EnableDpiAwareness()
+
+# ショートカットのアイコンに使うので先に作る
+try { [ExplorerHotkey]::SaveIco($icoPath) } catch {}
+$autostartFailed = $false
+try { New-Shortcut $startupLnk } catch { $autostartFailed = $true }
+
+# 通知の見出しにアプリの名前とアイコンを出すため、同じ ID のショートカットをスタートメニューに作る（画面を作る前に行う）
+$startMenuLnkIsNew = -not (Test-Path $startMenuLnk)
+try {
+    New-Shortcut $startMenuLnk
+    [AppUserModel]::SetAppId($startMenuLnk, $appId)
+} catch {}
 
 $shell = New-Object -ComObject Shell.Application
 $hk = New-Object ExplorerHotkey
@@ -148,9 +239,9 @@ $hk.add_Pressed({
         $fg = [ExplorerHotkey]::Foreground()
         $wins = @($shell.Windows() | Where-Object { $_.HWND -eq $fg.ToInt64() })
         if ($wins.Count -eq 0) { return }
-        # タブは同じウィンドウを共有するので、タイトル（「フォルダ名 - …」「フォルダ名 と他 2 個のタブ - …」）で表示中のタブを選ぶ
-        $title = [ExplorerHotkey]::Title($fg)
-        $w = $wins | Where-Object { $t = $_.Document.Folder.Title; $title -eq $t -or $title.StartsWith("$t ") } | Select-Object -First 1
+        # タブは同じウィンドウを共有するので、表示中のタブのものを選ぶ
+        $tab = [ExplorerTab]::Active($fg)
+        $w = $wins | Where-Object { [ExplorerTab]::Of($_) -eq $tab } | Select-Object -First 1
         if (-not $w) { $w = $wins[0] }
         $items = @($w.Document.SelectedItems())
     } catch {
@@ -192,7 +283,7 @@ $tray.ContextMenuStrip = $menu
 $githubItem.add_Click({ Start-Process "https://github.com/$Repo" })
 
 $exitItem.add_Click({
-    Remove-Item $startupLnk -ErrorAction SilentlyContinue
+    Remove-Item $startupLnk, $startMenuLnk -ErrorAction SilentlyContinue
     $updateTimer.Stop()
     $tray.Visible = $false
     $hk.Dispose()
@@ -229,10 +320,18 @@ $checkUpdate = {
 # 新しい版に入れ替えて起動し、起動の知らせ（QpenReady）を 60 秒待つ。来なければ元の版に戻す
 $applyUpdate = {
     param($update)
-    Copy-Item $ps1 $backupPs1 -Force
-    Copy-Item $update.Path $ps1 -Force
-    Remove-Item $update.Path -ErrorAction SilentlyContinue
-    Set-Content $updatedFlag $update.Version -Encoding UTF8
+    # ファイルを入れ替えてから画面を閉じる。入れ替えに失敗したら元に戻し、今の版のまま動き続ける
+    try {
+        Copy-Item $ps1 $backupPs1 -Force -ErrorAction Stop
+        try {
+            Copy-Item $update.Path $ps1 -Force -ErrorAction Stop
+            Set-Content $updatedFlag $update.Version -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Copy-Item $backupPs1 $ps1 -Force -ErrorAction SilentlyContinue
+            Remove-Item $updatedFlag -ErrorAction SilentlyContinue
+            throw
+        }
+    } finally { Remove-Item $update.Path -ErrorAction SilentlyContinue }
     $updateTimer.Stop()
     $tray.Visible = $false
     $hk.Dispose()
@@ -310,6 +409,13 @@ $tray.Visible = $true
 $readySignal = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, 'Local\QpenReady')
 [void]$readySignal.Set()
 Remove-Item $backupPs1 -ErrorAction SilentlyContinue
+
+# 初めて作ったショートカットは Windows への登録に数秒かかる。登録前に通知すると見出しが ID になるので待つ。
+# 待つ間はホットキーが効かないので、新しく作ったときだけにする
+if ($startMenuLnkIsNew) {
+    $apps = $shell.Namespace('shell:AppsFolder')
+    for ($i = 0; $i -lt 20 -and -not $apps.ParseName($appId); $i++) { Start-Sleep -Milliseconds 500 }
+}
 
 if (Test-Path $installedFlag) {
     Remove-Item $installedFlag -ErrorAction SilentlyContinue
