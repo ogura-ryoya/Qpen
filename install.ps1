@@ -1,13 +1,18 @@
-﻿# Qpen インストーラー（「Qpen をインストール」ショートカットか install.cmd から実行される）
+﻿# Qpen インストーラー（「Qpen をインストール」ショートカットから実行される）
 # このファイルと同じフォルダの Qpen.ps1 を %LOCALAPPDATA%\Qpen にコピーし、自動起動を登録して起動する。
 # Qpen が動いている場合は止めてから上書きする。成功したときの通知は Qpen 本体が起動時に出す。
 # 画面を出さずに動くので、失敗したときはメッセージを表示して知らせる。
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 
+# 画面を出さずに動いているので、ほかのウィンドウの裏に隠れないよう、最前面の見えない親ウィンドウを付けて表示する
 function Show-Error($message) {
-    [void][System.Windows.Forms.MessageBox]::Show($message, 'Qpen のインストール',
+    $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; Opacity = 0 }
+    $owner.Show()
+    $owner.Activate()
+    [void][System.Windows.Forms.MessageBox]::Show($owner, $message, 'Qpen のインストール',
         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    $owner.Dispose()
 }
 
 try {

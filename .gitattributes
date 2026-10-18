@@ -1,6 +1,5 @@
-# Windows PowerShell 5.1 / cmd 向けに改行は CRLF にする（Qpen.ps1 と install.ps1 は UTF-8 BOM 付きのまま保つ）
+# Windows PowerShell 5.1 向けに改行は CRLF にする（Qpen.ps1 と install.ps1 は UTF-8 BOM 付きのまま保つ）
 *.ps1 text eol=crlf
-*.cmd text eol=crlf
 *.md text eol=lf
 # インストール用のショートカットはバイナリなので変換しない
 *.lnk binary
