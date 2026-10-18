@@ -22,7 +22,10 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
+      # リリースノートを前回のタグ以降のコミットから作るため、履歴とタグをすべて取得する
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       # Qpen と同じ Windows PowerShell 5.1 で確認する
       - name: Qpen.ps1 を検証してバージョンを読み取る

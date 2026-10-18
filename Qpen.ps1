@@ -1,7 +1,7 @@
 ﻿# Qpen: エクスプローラー上で Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、起動するとサインイン時の自動起動も登録する。トレイの「終了」で自動起動も解除。
 # 起動時と、トレイの「更新を確認」を押したときに GitHub の Releases を確認し、新しい版があれば自動で更新する。
-$Version = '1.3.1'
+$Version = '1.4.0'
 $AppName = 'Qpen'
 
 $ps1 = $MyInvocation.MyCommand.Path
@@ -14,13 +14,19 @@ $skipFile = Join-Path $appDir 'skip-version.txt'       # 起動できなかっ�
 $backupPs1 = Join-Path $appDir 'Qpen.backup.ps1'       # 更新前の版（起動できなかったときに戻す）
 $Repo = 'ogura-ryoya/Qpen'                             # 自動更新の取得元（GitHub の Releases）
 
+# Qpen を画面なしで起動する命令。自動起動のショートカットと、更新後の起動し直しで共通に使う
+$conhost = "$env:WINDIR\System32\conhost.exe"
+$launchArgs = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`""
+
 function New-Shortcut($path) {
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
-    $s.TargetPath = "$env:WINDIR\System32\conhost.exe"
-    $s.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`""
+    $s.TargetPath = $conhost
+    $s.Arguments = $launchArgs
     $s.WindowStyle = 7
     $s.Save()
 }
+
+function Start-Qpen { Start-Process $conhost -ArgumentList $launchArgs }
 
 # 直接実行された場合（ショートカット経由でない場合）は、ターミナルを閉じても止まらないよう
 # エクスプローラー経由で起動し直す
@@ -31,7 +37,7 @@ if ((Get-CimInstance Win32_Process -Filter "ProcessId=$parentId").Name -ne 'conh
     # エクスプローラー経由で起動しなかった場合は、直接起動する
     $m = $null
     for ($i = 0; $i -lt 10 -and -not [System.Threading.Mutex]::TryOpenExisting('Local\Qpen', [ref]$m); $i++) { Start-Sleep -Milliseconds 500 }
-    if (-not $m) { Start-Process $startupLnk }
+    if (-not $m) { Start-Qpen }
     return
 }
 
@@ -197,21 +203,26 @@ $Usage = 'Ctrl+Q でまとめて開く'
 $tray.Text = "$AppName v$Version`n$Usage"  # 63 文字以内（NotifyIcon の上限）
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# 名前（太字）、バージョン、使い方を縦に並べる。表示だけなので押せないようにする。押せるのは「更新を確認」と「終了」
+# 名前（太字）、バージョン、使い方を縦に並べる。表示だけなので押せないようにする。
+# 押せるのは「GitHub を開く」「更新を確認」「終了」
 $nameItem = New-Object System.Windows.Forms.ToolStripMenuItem $AppName
 $nameItem.Font = New-Object System.Drawing.Font($nameItem.Font, [System.Drawing.FontStyle]::Bold)
 $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem "v$Version"
 $hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem $Usage
 foreach ($mi in $nameItem, $versionItem, $hotkeyItem) { $mi.Enabled = $false }
+$githubItem = New-Object System.Windows.Forms.ToolStripMenuItem 'GitHub を開く'
 $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem '更新を確認'
 $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了（自動起動も解除）'
 [void]$menu.Items.Add($nameItem)
 [void]$menu.Items.Add($versionItem)
 [void]$menu.Items.Add($hotkeyItem)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$menu.Items.Add($githubItem)
 [void]$menu.Items.Add($updateItem)
 [void]$menu.Items.Add($exitItem)
 $tray.ContextMenuStrip = $menu
+
+$githubItem.add_Click({ Start-Process "https://github.com/$Repo" })
 
 $exitItem.add_Click({
     Remove-Item $startupLnk -ErrorAction SilentlyContinue
@@ -266,7 +277,7 @@ $applyUpdate = {
     [void]$ready.Reset()
     $mutex.ReleaseMutex()
     $mutex.Dispose()
-    Start-Process $startupLnk
+    Start-Qpen
     if (-not $ready.WaitOne(60000)) {
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
             Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*\Qpen.ps1*' } |
@@ -275,7 +286,7 @@ $applyUpdate = {
         Remove-Item $updatedFlag -ErrorAction SilentlyContinue
         Set-Content $skipFile $update.Version -Encoding UTF8
         Set-Content $rolledBackFlag $update.Version -Encoding UTF8
-        Start-Process $startupLnk
+        Start-Qpen
     }
     $ready.Dispose()
     [System.Windows.Forms.Application]::Exit()

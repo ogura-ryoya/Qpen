@@ -1,6 +1,6 @@
 ﻿# リリース用（GitHub Actions から実行される）
 # 環境変数 VERSION の版がまだリリースされていなければ、vX.Y.Z のタグとリリースを作る。
-# リリースノートには README の「更新履歴」のこの版の項目を使う。
+# リリースノートは、前回のリリース（直前のタグ）以降のコミットメッセージの 1 行目を並べて作る。
 # 日本語のメッセージを Windows PowerShell 5.1 で正しく扱うため、このファイル自体も UTF-8 BOM 付きで保存する
 $ErrorActionPreference = 'Stop'
 
@@ -12,11 +12,15 @@ if ($released) {
     exit 0
 }
 
-$readme = [IO.File]::ReadAllText((Resolve-Path 'README.md').Path, [Text.Encoding]::UTF8)
-$section = [regex]::Match($readme, "(?ms)^### $([regex]::Escape($env:VERSION))\s*$\r?\n(.*?)(?=^#{2,3} |\z)")
-if (-not $section.Success) { throw "README の更新履歴に「### $env:VERSION」の項目がありません" }
+# git の出力を UTF-8 で受け取る（日本語のコミットメッセージを文字化けさせない）
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+# 直前のタグは、HEAD までに含まれる vX.Y.Z のタグのうちバージョンが最も大きいもの（なければ全履歴）
+$previous = @(git tag --merged HEAD --list 'v*' --sort=-v:refname) | Select-Object -First 1
+$range = if ($previous) { "$previous..HEAD" } else { 'HEAD' }
+$lines = @(git log $range --no-merges --format='- %s')
+if ($lines.Count -eq 0) { $lines = @('- 変更なし') }
 $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
-[IO.File]::WriteAllText($notesFile, $section.Groups[1].Value.Trim(), (New-Object Text.UTF8Encoding $false))
+[IO.File]::WriteAllText($notesFile, ($lines -join "`n"), (New-Object Text.UTF8Encoding $false))
 
 gh release create $tag --target $env:GITHUB_SHA --title "Qpen $tag" --notes-file $notesFile --latest
 if ($LASTEXITCODE -ne 0) { throw 'リリースを作れませんでした' }
