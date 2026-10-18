@@ -1,7 +1,5 @@
-﻿# リリース用（GitHub Actions から実行される）
-# 環境変数 VERSION の版がまだリリースされていなければ、vX.Y.Z のタグとリリースを作る。
-# リリースノートは、前回のリリース（直前のタグ）以降のコミットメッセージの 1 行目を並べて作る。
-# 日本語のメッセージを Windows PowerShell 5.1 で正しく扱うため、このファイル自体も UTF-8 BOM 付きで保存する
+﻿# v$VERSION が未リリースなら、前回のタグ以降のコミットメッセージをリリースノートにしてリリースを作る
+# 日本語を Windows PowerShell 5.1 で扱うため、このファイルは UTF-8 BOM 付きで保存する
 $ErrorActionPreference = 'Stop'
 
 $tag = "v$env:VERSION"
@@ -12,9 +10,7 @@ if ($released) {
     exit 0
 }
 
-# git の出力を UTF-8 で受け取る（日本語のコミットメッセージを文字化けさせない）
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-# 直前のタグは、HEAD までに含まれる vX.Y.Z のタグのうちバージョンが最も大きいもの（なければ全履歴）
+[Console]::OutputEncoding = [Text.Encoding]::UTF8  # 日本語のコミットメッセージを文字化けさせない
 $previous = @(git tag --merged HEAD --list 'v*' --sort=-v:refname) | Select-Object -First 1
 $range = if ($previous) { "$previous..HEAD" } else { 'HEAD' }
 $lines = @(git log $range --no-merges --format='- %s')

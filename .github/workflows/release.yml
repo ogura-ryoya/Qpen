@@ -1,9 +1,5 @@
-# main の Qpen.ps1 が変わったら、中の $Version を読み取り、まだリリースされていない版ならリリースを作る。
-# タグは必ず Qpen.ps1 のバージョンから作るので、タグとファイルのバージョンがずれることはない。
-# ファイルが壊れている（BOM がない・構文エラー・バージョンが読めない）ときはリリースしない。
-#
-# 注意: run に書いた処理は BOM なしのファイルとして実行されるため、Windows PowerShell 5.1 では
-# 日本語が文字化けする。run には英数字だけを書き、日本語を含む処理は .github/scripts の BOM 付きファイルに置く。
+# Qpen.ps1 の $Version が未リリースなら、検証して vX.Y.Z をリリースする。
+# run は BOM なしで実行され日本語が文字化けするので、英数字だけにして処理は .github/scripts に置く
 name: リリース
 
 on:
@@ -22,12 +18,10 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      # リリースノートを前回のタグ以降のコミットから作るため、履歴とタグをすべて取得する
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # リリースノート用に履歴とタグをすべて取得する
 
-      # Qpen と同じ Windows PowerShell 5.1 で確認する
       - name: Qpen.ps1 を検証してバージョンを読み取る
         id: check
         shell: powershell

@@ -1,11 +1,9 @@
-﻿# Qpen インストーラー（「Qpen をインストール」ショートカットから実行される）
-# このファイルと同じフォルダの Qpen.ps1 を %LOCALAPPDATA%\Qpen にコピーし、自動起動を登録して起動する。
-# Qpen が動いている場合は止めてから上書きする。成功したときの通知は Qpen 本体が起動時に出す。
-# 画面を出さずに動くので、失敗したときはメッセージを表示して知らせる。
+﻿# Qpen インストーラー（「Qpen をインストール」から実行される）
+# 隣の Qpen.ps1 を %LOCALAPPDATA%\Qpen にコピーして起動する。画面を出さずに動くので、失敗はメッセージで知らせる
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 
-# 画面を出さずに動いているので、ほかのウィンドウの裏に隠れないよう、最前面の見えない親ウィンドウを付けて表示する
+# 裏に隠れないよう、最前面の見えないウィンドウを親にして表示する
 function Show-Error($message) {
     $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; Opacity = 0 }
     $owner.Show()
@@ -23,7 +21,7 @@ try {
     $dir = Join-Path $env:LOCALAPPDATA 'Qpen'
     $ps1 = Join-Path $dir 'Qpen.ps1'
 
-    # 動いている Qpen を止め、完全に終わるまで待つ（上書きするため。どこから起動したものでも止める）
+    # 動いている Qpen を止めてから上書きする
     $running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
         Where-Object { $_.CommandLine -like '*\Qpen.ps1*' })
     foreach ($p in $running) {
@@ -36,14 +34,10 @@ try {
     Unblock-File $ps1
     New-Item -ItemType File -Force (Join-Path $dir 'installed.flag') | Out-Null
 
-    # Qpen は起動できると QpenReady を知らせてくる。最大 60 秒待って、来なければ失敗として知らせる
+    # 起動の知らせ（QpenReady）を 60 秒待つ。-Wait は起動した Qpen の終了まで待ってしまうので WaitForExit を使う
     $ready = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, 'Local\QpenReady')
     [void]$ready.Reset()
-
-    # Qpen.ps1 は自動起動のショートカットを作り、このプロセスから切り離して自分を起動し直す
-    # （-Wait ではなく WaitForExit を使う。-Wait だと切り離した Qpen の終了まで待ってしまう）
     (Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ps1`"").WaitForExit()
-
     if (-not $ready.WaitOne(60000)) {
         throw 'Qpen を起動できませんでした。PC を再起動してから、もう一度インストールしてください。'
     }

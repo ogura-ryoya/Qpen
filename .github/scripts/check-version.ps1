@@ -1,7 +1,5 @@
-﻿# リリース用（GitHub Actions から実行される）
-# Qpen.ps1 を検証し、中の $Version を GITHUB_OUTPUT の version に書き出す。
-# ファイルが壊れている（BOM がない・構文エラー・バージョンが読めない）ときは失敗させ、リリースさせない。
-# 日本語のメッセージを Windows PowerShell 5.1 で正しく扱うため、このファイル自体も UTF-8 BOM 付きで保存する
+﻿# Qpen.ps1 を検証し、$Version を GITHUB_OUTPUT の version に書き出す。壊れていれば失敗させる
+# 日本語を Windows PowerShell 5.1 で扱うため、このファイルは UTF-8 BOM 付きで保存する
 $ErrorActionPreference = 'Stop'
 
 $f = (Resolve-Path 'Qpen.ps1').Path
