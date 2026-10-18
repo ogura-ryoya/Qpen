@@ -1,12 +1,18 @@
 # main の Qpen.ps1 が変わったら、中の $Version を読み取り、まだリリースされていない版ならリリースを作る。
 # タグは必ず Qpen.ps1 のバージョンから作るので、タグとファイルのバージョンがずれることはない。
 # ファイルが壊れている（BOM がない・構文エラー・バージョンが読めない）ときはリリースしない。
+#
+# 注意: run に書いた処理は BOM なしのファイルとして実行されるため、Windows PowerShell 5.1 では
+# 日本語が文字化けする。run には英数字だけを書き、日本語を含む処理は .github/scripts の BOM 付きファイルに置く。
 name: リリース
 
 on:
   push:
     branches: [main]
-    paths: [Qpen.ps1]
+    paths:
+      - Qpen.ps1
+      - .github/workflows/release.yml
+      - .github/scripts/**
   workflow_dispatch:
 
 permissions:
@@ -16,50 +22,17 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Qpen と同じ Windows PowerShell 5.1 で確認する
       - name: Qpen.ps1 を検証してバージョンを読み取る
         id: check
         shell: powershell
-        run: |
-          $f = (Resolve-Path 'Qpen.ps1').Path
-          $bytes = [IO.File]::ReadAllBytes($f)
-          if ($bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
-              throw 'Qpen.ps1 が UTF-8 BOM 付きではありません（Windows PowerShell 5.1 で日本語が文字化けします）'
-          }
-          $errors = $null
-          [void][Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors)
-          if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Host "$($_.Extent.StartLineNumber) 行目: $($_.Message)" }
-              throw 'Qpen.ps1 に構文エラーがあります'
-          }
-          $match = [regex]::Match([IO.File]::ReadAllText($f, [Text.Encoding]::UTF8), "(?m)^\`$Version = '(\d+\.\d+\.\d+)'")
-          if (-not $match.Success) { throw "Qpen.ps1 に `$Version = 'X.Y.Z' が見つかりません" }
-          $version = $match.Groups[1].Value
-          Write-Host "バージョン: $version"
-          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$version`n")
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .github/scripts/check-version.ps1
 
       - name: まだリリースされていなければリリースを作る
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.check.outputs.version }}
-        run: |
-          $tag = "v$env:VERSION"
-          $released = @(gh release list --limit 1000 --json tagName --jq '.[].tagName') -contains $tag
-          if ($released) {
-              Write-Host "$tag はリリース済みなので、何もしません"
-              exit 0
-          }
-
-          # README の「更新履歴」から、この版の項目をリリースノートにする
-          $readme = [IO.File]::ReadAllText((Resolve-Path 'README.md').Path, [Text.Encoding]::UTF8)
-          $section = [regex]::Match($readme, "(?ms)^### $([regex]::Escape($env:VERSION))\s*$\r?\n(.*?)(?=^#{2,3} |\z)")
-          $notes = if ($section.Success) { $section.Groups[1].Value.Trim() } else { '' }
-          $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
-          [IO.File]::WriteAllText($notesFile, $notes, (New-Object Text.UTF8Encoding $false))
-
-          gh release create $tag --target $env:GITHUB_SHA --title "Qpen $tag" --notes-file $notesFile --latest
-          if ($LASTEXITCODE -ne 0) { throw 'リリースを作れませんでした' }
-          Write-Host "$tag をリリースしました"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .github/scripts/create-release.ps1
