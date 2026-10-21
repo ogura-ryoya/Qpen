@@ -1,6 +1,6 @@
 ﻿# Qpen: エクスプローラーで Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、自動起動を登録する。起動時と「更新を確認」で GitHub の最新リリースに更新する。
-$Version = '1.4.2'
+$Version = '1.5.0'
 $AppName = 'Qpen'
 $Repo = 'ogura-ryoya/Qpen'
 
@@ -15,6 +15,15 @@ $updatedFlag = Join-Path $appDir 'updated.flag'        # 更新直後（中身�
 $rolledBackFlag = Join-Path $appDir 'rolledback.flag'  # 更新した版が起動できず戻した（中身はその版）
 $skipFile = Join-Path $appDir 'skip-version.txt'       # 自動では更新しない版
 $backupPs1 = Join-Path $appDir 'Qpen.backup.ps1'       # 更新前の版
+$logFile = Join-Path $appDir 'log.txt'                 # 問題があったときにユーザーが丸ごと Claude に貼る。100KB で log.old.txt に回す
+
+function Write-Log($text) {
+    try {
+        if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 100KB) { Move-Item $logFile (Join-Path $appDir 'log.old.txt') -Force }
+        Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$PID] $($text -replace '\s*\r?\n\s*', ' | ')" -Encoding UTF8
+    } catch {}
+}
+trap { Write-Log "想定外のエラーで止まった: $_ $($_.InvocationInfo.PositionMessage)"; break }
 
 $conhost = "$env:WINDIR\System32\conhost.exe"
 $launchArgs = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`""
@@ -45,7 +54,8 @@ try {
     $ex = $_.Exception
     $acquired = ($ex -is [System.Threading.AbandonedMutexException]) -or ($ex.InnerException -is [System.Threading.AbandonedMutexException])
 }
-if (-not $acquired) { exit }  # すでに起動している
+if (-not $acquired) { Write-Log 'すでに起動しているので終わる'; exit }
+Write-Log "起動 v$Version PowerShell $($PSVersionTable.PSVersion) Windows $([Environment]::OSVersion.Version) $ps1"
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
@@ -218,16 +228,16 @@ public static class ExplorerTab {
 [ExplorerHotkey]::EnableDpiAwareness()
 
 # ショートカットのアイコンに使うので先に作る
-try { [ExplorerHotkey]::SaveIco($icoPath) } catch {}
+try { [ExplorerHotkey]::SaveIco($icoPath) } catch { Write-Log "アイコンを作れなかった: $_" }
 $autostartFailed = $false
-try { New-Shortcut $startupLnk } catch { $autostartFailed = $true }
+try { New-Shortcut $startupLnk } catch { $autostartFailed = $true; Write-Log "自動起動を登録できなかった: $_" }
 
 # 通知の見出しにアプリの名前とアイコンを出すため、同じ ID のショートカットをスタートメニューに作る（画面を作る前に行う）
 $startMenuLnkIsNew = -not (Test-Path $startMenuLnk)
 try {
     New-Shortcut $startMenuLnk
     [AppUserModel]::SetAppId($startMenuLnk, $appId)
-} catch {}
+} catch { Write-Log "スタートメニューのショートカットを作れなかった: $_" }
 
 $shell = New-Object -ComObject Shell.Application
 $hk = New-Object ExplorerHotkey
@@ -245,19 +255,22 @@ $hk.add_Pressed({
         if (-not $w) { $w = $wins[0] }
         $items = @($w.Document.SelectedItems())
     } catch {
-        $tray.ShowBalloonTip(5000, '選択中のファイルを取得できませんでした', 'もう一度 Ctrl+Q を押してください。', $Warning)
+        Write-Log "選択中のファイルを取得できなかった: $_"
+        $tray.ShowBalloonTip(5000, '選択中のファイルを取得できなかった', 'もう一度 Ctrl+Q を押す。', $Warning)
         return
     }
     $failedNames = New-Object System.Collections.Generic.List[string]
+    $opened = 0
     foreach ($item in $items) {
         if ([System.IO.Directory]::Exists($item.Path)) { continue }  # フォルダは開かない（IsFolder は ZIP も true になる）
-        try { Start-Process -FilePath $item.Path } catch { $failedNames.Add($item.Name) }
+        try { Start-Process -FilePath $item.Path; $opened++ } catch { $failedNames.Add($item.Name); Write-Log "開けなかった: $($item.Path): $_" }
         Start-Sleep -Milliseconds 300
     }
+    Write-Log "Ctrl+Q: 選択 $($items.Count) 個、開いた $opened 個、失敗 $($failedNames.Count) 個"
     if ($failedNames.Count -gt 0) {
         $names = ($failedNames | Select-Object -First 3) -join '、'
         if ($failedNames.Count -gt 3) { $names += " ほか $($failedNames.Count - 3) 件" }
-        $tray.ShowBalloonTip(6000, "$($failedNames.Count) 個のファイルを開けませんでした", $names, $Warning)
+        $tray.ShowBalloonTip(6000, "$($failedNames.Count) 個のファイルを開けなかった", $names, $Warning)
     }
 })
 
@@ -274,20 +287,50 @@ $hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem $Usage
 foreach ($mi in $nameItem, $versionItem, $hotkeyItem) { $mi.Enabled = $false }  # 表示だけ
 $githubItem = New-Object System.Windows.Forms.ToolStripMenuItem 'GitHub を開く'
 $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem '更新を確認'
+$logItem = New-Object System.Windows.Forms.ToolStripMenuItem 'ログを開く'
 $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了（自動起動も解除）'
-foreach ($mi in $nameItem, $versionItem, $hotkeyItem, (New-Object System.Windows.Forms.ToolStripSeparator), $githubItem, $updateItem, $exitItem) {
+$uninstallItem = New-Object System.Windows.Forms.ToolStripMenuItem 'アンインストール'
+foreach ($mi in $nameItem, $versionItem, $hotkeyItem, (New-Object System.Windows.Forms.ToolStripSeparator), $githubItem, $updateItem, $logItem,
+    (New-Object System.Windows.Forms.ToolStripSeparator), $exitItem, $uninstallItem) {
     [void]$menu.Items.Add($mi)
 }
 $tray.ContextMenuStrip = $menu
 
 $githubItem.add_Click({ Start-Process "https://github.com/$Repo" })
+$logItem.add_Click({ Start-Process notepad.exe "`"$logFile`"" })
 
-$exitItem.add_Click({
-    Remove-Item $startupLnk, $startMenuLnk -ErrorAction SilentlyContinue
+$stop = {
     $updateTimer.Stop()
     $tray.Visible = $false
     $hk.Dispose()
     [System.Windows.Forms.Application]::Exit()
+}
+
+# 終了はファイルとスタートメニューのショートカットを残す（そこから起動し直すと自動起動も登録し直す）
+$exitItem.add_Click({
+    Write-Log '終了（自動起動を外した）'
+    Remove-Item $startupLnk -ErrorAction SilentlyContinue
+    & $stop
+})
+
+# 裏に隠れないよう、最前面の見えないウィンドウを親にして聞く
+$uninstallItem.add_Click({
+    $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; Opacity = 0 }
+    $owner.Show()
+    $owner.Activate()
+    $answer = [System.Windows.Forms.MessageBox]::Show($owner,
+        "$AppName をアンインストールする？`n`n自動起動、スタートメニューのショートカット、$appDir（ログも含む）をすべて消す。元に戻せない。",
+        "$AppName のアンインストール", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    $owner.Dispose()
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    Remove-Item $startupLnk, $startMenuLnk -ErrorAction SilentlyContinue
+    # インストール先でなければ（リポジトリから直接動かしたときなど）フォルダは消さない
+    if ($appDir -eq (Join-Path $env:LOCALAPPDATA $AppName)) {
+        [Environment]::CurrentDirectory = $env:TEMP
+        Set-Location $env:TEMP
+        Remove-Item $appDir -Recurse -Force -ErrorAction SilentlyContinue
+    } else { Write-Log "アンインストール（$appDir はインストール先でないので消さない）" }
+    & $stop
 })
 
 # ---- 自動更新 ----
@@ -332,6 +375,7 @@ $applyUpdate = {
             throw
         }
     } finally { Remove-Item $update.Path -ErrorAction SilentlyContinue }
+    Write-Log "v$($update.Version) に入れ替えて起動する"
     $updateTimer.Stop()
     $tray.Visible = $false
     $hk.Dispose()
@@ -341,6 +385,7 @@ $applyUpdate = {
     $mutex.Dispose()
     Start-Qpen
     if (-not $ready.WaitOne(60000)) {
+        Write-Log "v$($update.Version) が 60 秒で起動しなかったので v$Version に戻す"
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
             Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*\Qpen.ps1*' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -382,23 +427,29 @@ $updateTimer.add_Tick({
     $manual = $script:checking.Manual
     $update = $null
     $failed = $false
-    try { $update = @($script:checking.Shell.EndInvoke($script:checking.Async)) | Where-Object { $_ } | Select-Object -First 1 } catch { $failed = $true }
+    try { $update = @($script:checking.Shell.EndInvoke($script:checking.Async)) | Where-Object { $_ } | Select-Object -First 1 } catch {
+        $failed = $true
+        Write-Log "更新を確認できなかった（$(if ($manual) { '手動' } else { "自動、残りのやり直し $script:startupRetries 回" })）: $_"
+    }
     $script:checking.Shell.Dispose()
     $script:checking = $null
     $updateItem.Text = '更新を確認'
     $updateItem.Enabled = $true
 
     if ($update) {
+        Write-Log "v$($update.Version) が見つかった"
         try { & $applyUpdate $update } catch {
-            $tray.ShowBalloonTip(5000, '更新できませんでした', "v$($update.Version) に入れ替えられませんでした。v$Version のまま使えます。", $Warning)
+            Write-Log "v$($update.Version) に入れ替えられなかった: $_"
+            $tray.ShowBalloonTip(5000, '更新できなかった', "v$($update.Version) に入れ替えられなかった。v$Version のまま使える。", $Warning)
         }
     } elseif ($failed -and -not $manual -and $script:startupRetries -gt 0) {
         $script:startupRetries--
         $script:startupCheckAt = (Get-Date).AddMinutes(1)
     } elseif ($failed) {
-        $tray.ShowBalloonTip(5000, '更新を確認できませんでした', 'インターネットの接続を確認して、あとでトレイの「更新を確認」からもう一度お試しください。', $Warning)
-    } elseif ($manual) {
-        $tray.ShowBalloonTip(5000, "$AppName は最新版です", "v$Version", $Info)
+        $tray.ShowBalloonTip(5000, '更新を確認できなかった', 'インターネットの接続を確かめ、あとでトレイの「更新を確認」からやり直す。', $Warning)
+    } else {
+        Write-Log "最新版（$(if ($manual) { '手動' } else { '自動' })）"
+        if ($manual) { $tray.ShowBalloonTip(5000, "$AppName は最新版だ", "v$Version", $Info) }
     }
 })
 $updateTimer.Start()
@@ -419,21 +470,24 @@ if ($startMenuLnkIsNew) {
 
 if (Test-Path $installedFlag) {
     Remove-Item $installedFlag -ErrorAction SilentlyContinue
-    $tray.ShowBalloonTip(8000, "$AppName をインストールしました",
-        'エクスプローラーでファイルを選んで Ctrl+Q を押すと、まとめて開けます。', $Info)
+    Write-Log 'インストールした'
+    $tray.ShowBalloonTip(8000, "$AppName をインストールした",
+        'エクスプローラーでファイルを選んで Ctrl+Q を押すと、まとめて開ける。', $Info)
 } elseif (Test-Path $updatedFlag) {
     $newVersion = (Get-Content $updatedFlag -Encoding UTF8 -TotalCount 1)
     Remove-Item $updatedFlag, $skipFile -ErrorAction SilentlyContinue
-    $tray.ShowBalloonTip(8000, "$AppName を v$newVersion に更新しました",
-        '引き続き、エクスプローラーで Ctrl+Q を押すとまとめて開けます。', $Info)
+    Write-Log "v$newVersion に更新した"
+    $tray.ShowBalloonTip(8000, "$AppName を v$newVersion に更新した",
+        '引き続き、エクスプローラーで Ctrl+Q を押すとまとめて開ける。', $Info)
 } elseif (Test-Path $rolledBackFlag) {
     $failedVersion = (Get-Content $rolledBackFlag -Encoding UTF8 -TotalCount 1)
     Remove-Item $rolledBackFlag -ErrorAction SilentlyContinue
-    $tray.ShowBalloonTip(8000, "v$failedVersion に更新できませんでした",
-        "新しい版が起動できなかったため、v$Version に戻しました。この版には自動では更新しません。", $Warning)
+    Write-Log "v$failedVersion から戻した。この版には自動で更新しない"
+    $tray.ShowBalloonTip(8000, "v$failedVersion に更新できなかった",
+        "新しい版が起動できなかったので、v$Version に戻した。この版には自動では更新しない。", $Warning)
 } elseif ($autostartFailed) {
-    $tray.ShowBalloonTip(8000, '自動起動を登録できませんでした',
-        '次にサインインしたとき、Qpen が自動で起動しないことがあります。もう一度インストールしてください。', $Warning)
+    $tray.ShowBalloonTip(8000, '自動起動を登録できなかった',
+        '次にサインインしたとき、Qpen が自動で起動しないことがある。もう一度インストールする。', $Warning)
 }
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()
