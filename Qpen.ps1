@@ -1,12 +1,10 @@
-﻿# ==== ここから Qpen だけ（ほかはテストで copathy・Qpen と同じかを確かめる） ====
-# Qpen: エクスプローラーで Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
+﻿# Qpen: エクスプローラーで Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、自動起動を登録する。起動時と「更新を確認」で GitHub の最新リリースに更新する。
-$Version = '1.8.0'
+$Version = '1.8.1'
 $AppName = 'Qpen'
 $Repo = 'ogura-ryoya/Qpen'
 $Usage = 'Ctrl+Q でまとめて開く'
 $Hint = 'エクスプローラーでファイルを選んで Ctrl+Q を押すと、まとめて開ける。'  # 通知で使い方を知らせる
-# ==== ここまで ====
 $checkEveryHours = 24  # 起動時のほか、動いている間もこの時間ごとに更新を確認する（スリープで使い続ける PC にも届くように）
 
 $ps1 = $MyInvocation.MyCommand.Path
@@ -83,7 +81,6 @@ if (-not $acquired) { Write-Log 'すでに起動しているので、動いて�
 $quitEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, "Local\$($AppName)Quit")
 $startedByUpdate = Test-Path $updatedFlag
 Write-Log "起動 v$Version PowerShell $($PSVersionTable.PSVersion) Windows $([Environment]::OSVersion.Version) $ps1"
-# ==== ここから Qpen だけ ====
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
@@ -263,7 +260,6 @@ public static class ExplorerTab {
     }
 }
 "@
-# ==== ここまで ====
 
 [ExplorerHotkey]::EnableDpiAwareness()
 
@@ -284,7 +280,6 @@ $hk = New-Object ExplorerHotkey
 $Warning = [System.Windows.Forms.ToolTipIcon]::Warning
 $Info = [System.Windows.Forms.ToolTipIcon]::Info
 
-# ==== ここから Qpen だけ ====
 $hk.add_RegisterFailed({
     Write-Log "Ctrl+Q を登録できなかった（Windows のエラー $($hk.LastError)）。ほかのアプリが Ctrl+Q を使っているかもしれない"
     $tray.ShowBalloonTip(8000, 'Ctrl+Q が使えない',
@@ -341,7 +336,6 @@ $hk.add_Pressed({
         $tray.ShowBalloonTip(6000, "$($failedNames.Count) 個のファイルを開けなかった", $names, $Warning)
     }
 })
-# ==== ここまで ====
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = [ExplorerHotkey]::MakeIcon([System.Windows.Forms.SystemInformation]::SmallIconSize.Width)
