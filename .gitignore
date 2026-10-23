@@ -1,0 +1,6 @@
+log.txt
+log.old.txt
+*.flag
+skip-version.txt
+Qpen.ico
+Qpen.backup.ps1
