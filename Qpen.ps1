@@ -1,6 +1,6 @@
 ﻿# Qpen: エクスプローラーで Ctrl+Q を押すと、選択中のファイルを既定のアプリでまとめて開く。
 # トレイに常駐し、自動起動を登録する。起動時と「更新を確認」で GitHub の最新リリースに更新する。
-$Version = '1.8.1'
+$Version = '1.9.0'
 $AppName = 'Qpen'
 $Repo = 'ogura-ryoya/Qpen'
 $Usage = 'Ctrl+Q でまとめて開く'
@@ -18,6 +18,7 @@ $updatedFlag = Join-Path $appDir 'updated.flag'        # 更新直後（中身�
 $rolledBackFlag = Join-Path $appDir 'rolledback.flag'  # 更新した版が起動できず戻した（中身はその版）
 $skipFile = Join-Path $appDir 'skip-version.txt'       # 自動では更新しない版
 $backupPs1 = Join-Path $appDir 'Qpen.backup.ps1'       # 更新前の版
+$noAutostartFlag = Join-Path $appDir 'no-autostart.flag'  # これがあればサインイン時に起動しない（メニューで切った）
 $logFile = Join-Path $appDir 'log.txt'                 # 問題があったときにユーザーが丸ごと Claude に貼る。100KB で log.old.txt に回す
 
 function Write-Log($text) {
@@ -47,6 +48,34 @@ function New-Shortcut($path) {
 }
 
 function Start-App { Start-Process $conhost -ArgumentList $launchArgs -PassThru }
+
+# ---- サインイン時に起動 ----
+# 設定は印（$noAutostartFlag）が無ければオン。スタートアップのショートカットは設定に合わせて作る・消す
+function Test-Autostart { -not (Test-Path $noAutostartFlag) }
+
+# 設定を切り替える。途中で失敗したら元に戻し、理由を返す（成功なら $null）。元から無いものを消すのは成功
+function Set-Autostart([bool]$on) {
+    try {
+        if ($on) {
+            [IO.File]::Delete($noAutostartFlag)
+            try { New-Shortcut $startupLnk } catch { [IO.File]::WriteAllText($noAutostartFlag, ''); throw }
+        } else {
+            [IO.File]::WriteAllText($noAutostartFlag, '')
+            try { if (Test-Path $startupLnk) { [IO.File]::Delete($startupLnk) } } catch { [IO.File]::Delete($noAutostartFlag); throw }  # スタートアップのフォルダが無くても成功
+        }
+        $null
+    } catch { "$($_.Exception.Message)" }
+}
+
+# 起動したときに、ショートカットを設定に合わせる。オンなのに作れなければ $false
+function Restore-Autostart {
+    if (Test-Autostart) {
+        try { New-Shortcut $startupLnk } catch { Write-Log "自動起動を登録できなかった: $_"; return $false }
+    } else {
+        try { if (Test-Path $startupLnk) { [IO.File]::Delete($startupLnk) } } catch { Write-Log "サインイン時に起動しない設定だが、自動起動のショートカットを消せなかった: $_" }
+    }
+    $true
+}
 
 # 裏に隠れないよう、最前面の見えないウィンドウを親にして出す。
 # 出している間は更新を止める（止めると、閉じられたダイアログが初めの選択を返し、アンインストールなどが進んでしまう）
@@ -265,8 +294,7 @@ public static class ExplorerTab {
 
 # ショートカットのアイコンに使うので先に作る
 try { [ExplorerHotkey]::SaveIco($icoPath) } catch { Write-Log "アイコンを作れなかった: $_" }
-$autostartFailed = $false
-try { New-Shortcut $startupLnk } catch { $autostartFailed = $true; Write-Log "自動起動を登録できなかった: $_" }
+$autostartFailed = -not (Restore-Autostart)
 
 # 通知の見出しにアプリの名前とアイコンを出すため、同じ ID のショートカットをスタートメニューに作る（画面を作る前に行う）
 $startMenuLnkIsNew = -not (Test-Path $startMenuLnk)
@@ -347,18 +375,21 @@ $nameItem.Font = New-Object System.Drawing.Font($nameItem.Font, [System.Drawing.
 $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem "v$Version"
 $hotkeyItem = New-Object System.Windows.Forms.ToolStripMenuItem $Usage
 foreach ($mi in $nameItem, $versionItem, $hotkeyItem) { $mi.Enabled = $false }  # 表示だけ
-$githubItem = New-Object System.Windows.Forms.ToolStripMenuItem 'GitHub を開く'
+$historyItem = New-Object System.Windows.Forms.ToolStripMenuItem '更新履歴を見る'
 $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem '更新を確認'
 $logItem = New-Object System.Windows.Forms.ToolStripMenuItem 'ログをコピー'
-$exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了（自動起動も解除）'
+$autostartItem = New-Object System.Windows.Forms.ToolStripMenuItem 'サインイン時に起動'
+$exitItem = New-Object System.Windows.Forms.ToolStripMenuItem '終了'
 $uninstallItem = New-Object System.Windows.Forms.ToolStripMenuItem 'アンインストール'
-foreach ($mi in $nameItem, $versionItem, $hotkeyItem, (New-Object System.Windows.Forms.ToolStripSeparator), $githubItem, $updateItem, $logItem,
-    (New-Object System.Windows.Forms.ToolStripSeparator), $exitItem, $uninstallItem) {
+foreach ($mi in $nameItem, $versionItem, $hotkeyItem, (New-Object System.Windows.Forms.ToolStripSeparator), $historyItem, $updateItem, $logItem,
+    (New-Object System.Windows.Forms.ToolStripSeparator), $autostartItem, (New-Object System.Windows.Forms.ToolStripSeparator), $exitItem, $uninstallItem) {
     [void]$menu.Items.Add($mi)
 }
 $tray.ContextMenuStrip = $menu
+# チェックは開くたびに読み直す（設定はファイルなので、ほかの手で変わることもある）
+$menu.add_Opening({ $autostartItem.Checked = Test-Autostart })
 
-$githubItem.add_Click({ Start-Process "https://github.com/$Repo" })
+$historyItem.add_Click({ Start-Process "https://github.com/$Repo/releases" })
 # ログを、手がかり（版・Windows・場所）と前のログの終わりも付けてクリップボードに入れる（そのまま Claude に貼る）
 $logItem.add_Click({
     $old = Join-Path $appDir 'log.old.txt'
@@ -378,13 +409,20 @@ $stop = {
     [System.Windows.Forms.Application]::Exit()
 }
 
-# 終了はファイルとスタートメニューのショートカットを残す（そこから起動し直すと自動起動も登録し直す）
+$autostartItem.add_Click({
+    $on = -not (Test-Autostart)
+    $word = if ($on) { '起動する' } else { '起動しない' }
+    $err = Set-Autostart $on
+    if ($err) {
+        Write-Log "サインイン時に$($word)ように切り替えられなかった: $err"
+        [void](Show-Dialog "サインイン時に$($word)ように切り替えられなかった。`n`n$err" $AppName OK Warning)
+    } else { Write-Log "サインイン時に$($word)ようにした" }
+    $autostartItem.Checked = Test-Autostart
+})
+
+# 終了は止めるだけ（サインイン時に起動の設定はそのまま）
 $exitItem.add_Click({
-    Remove-Item $startupLnk -ErrorAction SilentlyContinue
-    if (Test-Path $startupLnk) {
-        Write-Log "終了（自動起動を外せなかった: $startupLnk）"
-        [void](Show-Dialog "自動起動を外せなかった。次のショートカットを手で消す。`n`n$startupLnk" "$AppName の終了" OK Warning)
-    } else { Write-Log '終了（自動起動を外した）' }
+    Write-Log '終了'
     & $stop
 })
 

@@ -1,4 +1,4 @@
-﻿# Qpen インストーラー（「Qpen をインストール」から実行される）
+﻿# Qpen インストーラー（Qpen-setup.cmd の中の setup.ps1 が、一時フォルダに取り出して実行する）
 # 隣の Qpen.ps1 を %LOCALAPPDATA%\Qpen にコピーして起動する。画面を出さずに動くので、失敗はメッセージで知らせる
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -42,7 +42,7 @@ function Wait-Ready($ready, $process, $ms = 60000) {
 try {
     $source = Join-Path $PSScriptRoot 'Qpen.ps1'
     if (-not (Test-Path $source)) {
-        throw "Qpen.ps1 が見つからない。ダウンロードした ZIP を展開し、展開したフォルダの中で実行する。"
+        throw "Qpen.ps1 が見つからない。Qpen-setup.cmd をダウンロードし直して実行する。"
     }
     $ps1 = Join-Path $dir 'Qpen.ps1'
 
@@ -75,7 +75,8 @@ try {
     # 本体と同じく画面なしで起動し、起動の知らせ（QpenReady）を待つ
     $ready = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, 'Local\QpenReady')
     [void]$ready.Reset()
-    $launch = Start-Process "$env:WINDIR\System32\conhost.exe" -PassThru -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" headless"
+    # 作業フォルダはインストール先にする（常駐の間、インストーラーの一時フォルダを握らないように）
+    $launch = Start-Process "$env:WINDIR\System32\conhost.exe" -PassThru -WorkingDirectory $dir -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" headless"
     $result = Wait-Ready $ready $launch
     if ($result -ne 'ready') {
         throw "Qpen を起動できなかった（$(if ($result -eq 'exited') { '起動してすぐ終わった' } else { '60 秒たっても起動しない' })）。理由はログに残した: $logFile"
@@ -84,5 +85,5 @@ try {
     Remove-Item $installedFlag -ErrorAction SilentlyContinue
     Write-Log "失敗した: $_ $($_.InvocationInfo.PositionMessage)"
     Show-Error "インストールに失敗した。`n`n$($_.Exception.Message)"
-    exit 1
+    exit 3  # 自分で知らせた印（setup.ps1 が重ねて知らせない。PowerShell が自分で止まったときは 1）
 }

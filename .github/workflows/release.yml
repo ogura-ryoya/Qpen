@@ -8,7 +8,7 @@ on:
     paths:
       - Qpen.ps1
       - install.ps1
-      - '*.lnk'
+      - setup.ps1
       - .github/workflows/release.yml
       - .github/scripts/**
       - tests/**
